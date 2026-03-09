@@ -415,6 +415,154 @@ EOF
   info "Edit the file to fill in your skill, then run 'bard play' to rebuild the registry."
 }
 
+# ── bard harmonize / bard contribute ─────────────────────────────────────────
+cmd_harmonize() {
+  if [[ -z "${1:-}" ]]; then
+    _harmonize_all
+  else
+    _harmonize_one "$1"
+  fi
+}
+
+# Sync all bard-* skills in ~/.agents/skills/ that are not yet in the repo
+_harmonize_all() {
+  if [[ "${DRY_RUN}" == true ]]; then
+    info "bard harmonize (dry run) — no changes will be made:"
+    info "Scanning for bard-* skills in ${SKILLS_DIR} not yet in repo..."
+    printf '\n'
+  else
+    info "Scanning for bard-* skills in ${SKILLS_DIR} not yet in repo..."
+  fi
+
+  local queued=0
+  local skipped=0
+  local new_files=()
+
+  while IFS= read -r -d '' skill_file; do
+    local src_filename
+    src_filename="$(basename "${skill_file}")"
+
+    # Only process bard-* prefixed skills
+    [[ "${src_filename}" != bard-* ]] && continue
+
+    local rel="${skill_file#${SKILLS_DIR}/}"
+    local category
+    category="$(dirname "${rel}")"
+    local dest_dir="${BARD_REPO_ROOT}/skills/${category}"
+    local dest_file="${dest_dir}/${src_filename}"
+
+    if [[ -f "${dest_file}" ]]; then
+      (( skipped++ )) || true
+      continue
+    fi
+
+    if [[ "${DRY_RUN}" == true ]]; then
+      [[ ! -d "${dest_dir}" ]] && dry "mkdir -p ${dest_dir}"
+      dry "copy ${skill_file} → ${dest_file}"
+    else
+      mkdir -p "${dest_dir}"
+      cp "${skill_file}" "${dest_file}"
+      new_files+=("skills/${category}/${src_filename}")
+      success "Harmonized: ${dest_file}"
+    fi
+    (( queued++ )) || true
+  done < <(find "${SKILLS_DIR}" -name "*.md" -type f -print0 2>/dev/null | sort -z)
+
+  printf '\n'
+
+  if [[ "${DRY_RUN}" == true ]]; then
+    dry "${queued} skill(s) would be copied to repo  (${skipped} already in repo, skipped)"
+    printf '\n'
+    info "Dry run complete — no changes were made."
+    return
+  fi
+
+  if [[ "${queued}" -eq 0 ]]; then
+    info "Nothing to harmonize — all bard-* skills are already in the repo."
+    info "Skills without the bard- prefix are private and never harmonized."
+    return
+  fi
+
+  info "${queued} skill(s) harmonized  (${skipped} already in repo, skipped)"
+  info "Review the skills, then commit and push to share them with your team:"
+  printf '\n'
+  printf '    cd %s\n' "${BARD_REPO_ROOT}"
+  for f in "${new_files[@]}"; do
+    printf '    git add %s\n' "${f}"
+  done
+  printf '    git commit -m "harmonize skills from local"\n'
+  printf '    git push\n'
+  printf '\n'
+  info "Others can then run 'bard play' to receive them."
+}
+
+# Harmonize a single skill by ID
+_harmonize_one() {
+  local skill_id="$1"
+
+  local skill_file
+  skill_file="$(_find_skill_file "${skill_id}")"
+  [[ -z "${skill_file}" ]] && error "Skill not found: ${skill_id}. Run 'bard list' to see available skills."
+
+  # Derive category from the directory name
+  local rel="${skill_file#${SKILLS_DIR}/}"
+  local category
+  category="$(dirname "${rel}")"
+  local src_filename
+  src_filename="$(basename "${skill_file}")"
+
+  # Ensure bard- prefix on destination filename and id
+  local dest_filename dest_id
+  if [[ "${src_filename}" == bard-* ]]; then
+    dest_filename="${src_filename}"
+    dest_id="${src_filename%.md}"
+  else
+    dest_filename="bard-${src_filename}"
+    dest_id="bard-${src_filename%.md}"
+  fi
+
+  local dest_dir="${BARD_REPO_ROOT}/skills/${category}"
+  local dest_file="${dest_dir}/${dest_filename}"
+
+  if [[ "${DRY_RUN}" == true ]]; then
+    info "bard harmonize (dry run) — no changes will be made:"
+    printf '\n'
+    [[ ! -d "${dest_dir}" ]] && dry "mkdir -p ${dest_dir}"
+    if [[ -f "${dest_file}" ]]; then
+      dry "copy ${skill_file} → ${dest_file}  (ERROR: file already exists in repo — would abort)"
+    else
+      dry "copy ${skill_file} → ${dest_file}"
+      [[ "${src_filename}" != bard-* ]] && dry "update frontmatter id: ${skill_id} → ${dest_id}"
+    fi
+    printf '\n'
+    info "Dry run complete — no changes were made."
+    return
+  fi
+
+  if [[ -f "${dest_file}" ]]; then
+    error "${dest_filename} already exists in the repo. Edit it directly to update an official skill."
+  fi
+
+  mkdir -p "${dest_dir}"
+  cp "${skill_file}" "${dest_file}"
+
+  # If we added a bard- prefix, update the id field in frontmatter
+  if [[ "${src_filename}" != bard-* ]]; then
+    perl -i -p -e "s/^(id:[[:space:]]*)${skill_id}\$/$\{1}${dest_id}/" "${dest_file}"
+    info "Renamed id: ${skill_id} → ${dest_id}"
+  fi
+
+  success "Harmonized: ${dest_file}"
+  info "Review the skill, then commit and push to share it with your team:"
+  printf '\n'
+  printf '    cd %s\n' "${BARD_REPO_ROOT}"
+  printf '    git add skills/%s/%s\n' "${category}" "${dest_filename}"
+  printf '    git commit -m "add %s skill"\n' "${dest_id}"
+  printf '    git push\n'
+  printf '\n'
+  info "Others can then run 'bard play' to receive it."
+}
+
 # ── Skill lookup ───────────────────────────────────────────────────────────────
 _find_skill_file() {
   local skill_id="$1"
@@ -454,22 +602,26 @@ cmd_help() {
     show <skill-id>                   Fill {{variables}} interactively, print resolved prompt
     compose <name> --category <c>     Scaffold a new skill in ~/.agents/skills/
     add <name> --category <c>         Alias for compose
+    harmonize [<skill-id>]            Copy skill(s) from ~/.agents/ back into the repo to share
+                                      No argument: syncs all bard-* skills not yet in repo
+                                      With skill-id: syncs that one skill (any prefix)
+    contribute [<skill-id>]           Alias for harmonize
     help                              Show this help
 
   FLAGS
     --dry-run, -n                     Preview what a command would do without making changes
-                                      Supported by: play, compose
+                                      Supported by: play, compose, harmonize
 
   EXAMPLES
     bard play
     bard --dry-run play
-    bard play --dry-run
     bard list
     bard list --category coding
     bard info bard-code-review
     bard show bard-summarize
     bard compose my-skill --category devops
-    bard --dry-run compose my-skill --category devops
+    bard harmonize my-skill
+    bard --dry-run harmonize my-skill
 
   SKILL LOCATIONS
     Official skills  ~/.agents/skills/<category>/bard-*.md  (managed by bard play)
@@ -505,8 +657,9 @@ main() {
     list)                cmd_list "${args[@]+"${args[@]}"}" ;;
     info)                cmd_info "${args[@]+"${args[@]}"}" ;;
     show)                cmd_show "${args[@]+"${args[@]}"}" ;;
-    compose|add)         cmd_compose "${args[@]+"${args[@]}"}" ;;
-    help|--help|-h)      cmd_help ;;
+    compose|add)              cmd_compose "${args[@]+"${args[@]}"}" ;;
+    harmonize|contribute)     cmd_harmonize "${args[@]+"${args[@]}"}" ;;
+    help|--help|-h)           cmd_help ;;
     version|--version)   echo "bard ${BARD_VERSION}" ;;
     *) error "Unknown command: ${cmd}. Run 'bard help' for usage." ;;
   esac
