@@ -1,0 +1,515 @@
+#!/usr/bin/env bash
+# bard — Bard Agentic Resource Distribution
+# Central skill repository CLI for AI agents
+set -euo pipefail
+
+# ── Constants ──────────────────────────────────────────────────────────────────
+BARD_VERSION="1.0.0"
+BARD_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AGENTS_DIR="${HOME}/.agents"
+SKILLS_DIR="${AGENTS_DIR}/skills"
+REGISTRY_DIR="${AGENTS_DIR}/registry"
+REGISTRY_FILE="${REGISTRY_DIR}/skills.json"
+LOCAL_BIN="${HOME}/.local/bin"
+DRY_RUN=false
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+info()    { printf '\033[0;34m[bard]\033[0m %s\n' "$*"; }
+success() { printf '\033[0;32m[bard]\033[0m %s\n' "$*"; }
+warn()    { printf '\033[0;33m[bard]\033[0m warning: %s\n' "$*" >&2; }
+error()   { printf '\033[0;31m[bard]\033[0m error: %s\n' "$*" >&2; exit 1; }
+dry()     { printf '\033[0;35m[dry-run]\033[0m would: %s\n' "$*"; }
+
+require_jq() {
+  if ! command -v jq &>/dev/null; then
+    error "jq is required but not installed. Install it with: brew install jq"
+  fi
+}
+
+# ── Registry ───────────────────────────────────────────────────────────────────
+build_registry() {
+  require_jq
+  mkdir -p "${REGISTRY_DIR}"
+  local entries="[]"
+
+  while IFS= read -r -d '' skill_file; do
+    local rel_path="${skill_file#${SKILLS_DIR}/}"
+    local category
+    category="$(dirname "${rel_path}")"
+    local filename
+    filename="$(basename "${skill_file}" .md)"
+
+    # Parse frontmatter fields
+    local id name tags description agents_list
+    id="$(awk '/^---/{f=!f; next} f && /^id:/{sub(/^id:[[:space:]]*/,""); print; exit}' "${skill_file}" 2>/dev/null || echo "${filename}")"
+    name="$(awk '/^---/{f=!f; next} f && /^name:/{sub(/^name:[[:space:]]*/,""); print; exit}' "${skill_file}" 2>/dev/null || echo "${filename}")"
+    description="$(awk '/^---/{f=!f; next} f && /^description:/{sub(/^description:[[:space:]]*/,""); print; exit}' "${skill_file}" 2>/dev/null || echo "")"
+    tags="$(awk '/^---/{f=!f; next} f && /^tags:/{sub(/^tags:[[:space:]]*/,""); print; exit}' "${skill_file}" 2>/dev/null || echo "[]")"
+    agents_list="$(awk '/^---/{f=!f; next} f && /^agents:/{sub(/^agents:[[:space:]]*/,""); print; exit}' "${skill_file}" 2>/dev/null || echo "[]")"
+
+    local entry
+    entry="$(jq -n \
+      --arg id "${id}" \
+      --arg name "${name}" \
+      --arg category "${category}" \
+      --arg description "${description}" \
+      --arg tags "${tags}" \
+      --arg agents "${agents_list}" \
+      --arg file "${skill_file}" \
+      '{id: $id, name: $name, category: $category, description: $description, tags: $tags, agents: $agents, file: $file}')"
+
+    entries="$(echo "${entries}" | jq ". + [${entry}]")"
+  done < <(find "${SKILLS_DIR}" -name "*.md" -type f -print0 2>/dev/null | sort -z)
+
+  echo "${entries}" | jq '.' > "${REGISTRY_FILE}"
+  success "Registry rebuilt: $(echo "${entries}" | jq 'length') skills indexed"
+}
+
+# ── bard play ─────────────────────────────────────────────────────────────────
+cmd_play() {
+  if [[ "${DRY_RUN}" == true ]]; then
+    info "BARD v${BARD_VERSION} — play (dry run)"
+    info "No changes will be made. Showing what would happen:"
+    printf '\n'
+  else
+    info "BARD v${BARD_VERSION} — play"
+  fi
+
+  # 1. git pull
+  if [[ "${DRY_RUN}" == true ]]; then
+    dry "git pull --ff-only in ${BARD_REPO_ROOT}"
+  else
+    info "Updating repo..."
+    if git -C "${BARD_REPO_ROOT}" pull --ff-only 2>&1 | grep -q "Already up to date"; then
+      info "Repo already up to date."
+    else
+      success "Repo updated."
+    fi
+  fi
+
+  # 2. Create ~/.agents structure
+  if [[ "${DRY_RUN}" == true ]]; then
+    dry "mkdir -p ${SKILLS_DIR}"
+    dry "mkdir -p ${REGISTRY_DIR}"
+  else
+    mkdir -p "${SKILLS_DIR}" "${REGISTRY_DIR}"
+    success "~/.agents/ structure ready."
+  fi
+
+  # 3. Sync official skills (bard-* prefix only)
+  local synced=0
+  local repo_skills_dir="${BARD_REPO_ROOT}/skills"
+
+  [[ "${DRY_RUN}" == false ]] && info "Syncing official skills..."
+
+  while IFS= read -r -d '' src_file; do
+    local rel="${src_file#${repo_skills_dir}/}"
+    local category
+    category="$(dirname "${rel}")"
+    local filename
+    filename="$(basename "${src_file}")"
+
+    # Only sync files with bard- prefix
+    if [[ "${filename}" != bard-* ]]; then
+      continue
+    fi
+
+    local dest_dir="${SKILLS_DIR}/${category}"
+    local dest_file="${dest_dir}/${filename}"
+
+    if [[ "${DRY_RUN}" == true ]]; then
+      if [[ -f "${dest_file}" ]]; then
+        dry "overwrite ${dest_file}  (from ${rel})"
+      else
+        dry "create   ${dest_file}  (from ${rel})"
+      fi
+    else
+      mkdir -p "${dest_dir}"
+      cp "${src_file}" "${dest_file}"
+    fi
+    (( synced++ )) || true
+  done < <(find "${repo_skills_dir}" -name "*.md" -type f -print0 2>/dev/null | sort -z)
+
+  if [[ "${DRY_RUN}" == true ]]; then
+    dry "${synced} official skill(s) would be synced (user skills with no bard- prefix are untouched)"
+  else
+    success "Synced ${synced} official skill(s)."
+  fi
+
+  # 4. Rebuild registry
+  if [[ "${DRY_RUN}" == true ]]; then
+    local existing=0
+    [[ -f "${REGISTRY_FILE}" ]] && existing="$(jq 'length' "${REGISTRY_FILE}" 2>/dev/null || echo 0)"
+    dry "rebuild registry → ${REGISTRY_FILE}  (currently ${existing} skills)"
+  else
+    info "Rebuilding registry..."
+    build_registry
+  fi
+
+  # 5. Agent symlinks
+  [[ "${DRY_RUN}" == false ]] && info "Creating agent symlinks..."
+  _create_agent_symlink "${HOME}/.claude" "skills" "${AGENTS_DIR}" "Claude Code"
+  _create_agent_symlink "${HOME}/.cursor" "skills" "${AGENTS_DIR}" "Cursor"
+
+  # 6. Symlink bard binary to ~/.local/bin
+  local bin_link="${LOCAL_BIN}/bard"
+  local bard_bin="${BARD_REPO_ROOT}/bard"
+
+  if [[ "${DRY_RUN}" == true ]]; then
+    if [[ -L "${bin_link}" && "$(readlink "${bin_link}")" == "${bard_bin}" ]]; then
+      dry "symlink ${bin_link} → ${bard_bin}  (already up to date)"
+    else
+      dry "mkdir -p ${LOCAL_BIN}"
+      dry "symlink ${bin_link} → ${bard_bin}"
+    fi
+  else
+    mkdir -p "${LOCAL_BIN}"
+    if [[ -L "${bin_link}" && "$(readlink "${bin_link}")" == "${bard_bin}" ]]; then
+      info "~/.local/bin/bard symlink already up to date."
+    else
+      ln -sf "${bard_bin}" "${bin_link}"
+      success "Symlinked: ${bin_link} → ${bard_bin}"
+    fi
+  fi
+
+  # 7. PATH warning (always shown — informational only)
+  if [[ ":${PATH}:" != *":${LOCAL_BIN}:"* ]]; then
+    warn "~/.local/bin is not in your PATH."
+    warn "Add this to your shell profile (~/.zshrc or ~/.bashrc):"
+    warn '  export PATH="${HOME}/.local/bin:${PATH}"'
+  fi
+
+  if [[ "${DRY_RUN}" == true ]]; then
+    printf '\n'
+    info "Dry run complete — no changes were made."
+  else
+    success "bard play complete."
+  fi
+}
+
+_create_agent_symlink() {
+  local agent_dir="$1"
+  local link_name="$2"
+  local target="$3"
+  local label="$4"
+  local link_path="${agent_dir}/${link_name}"
+
+  if [[ ! -d "${agent_dir}" ]]; then
+    warn "${label} config dir not found (${agent_dir}) — skipping symlink."
+    return
+  fi
+
+  if [[ -L "${link_path}" && "$(readlink "${link_path}")" == "${target}" ]]; then
+    if [[ "${DRY_RUN}" == true ]]; then
+      dry "symlink ${link_path} → ${target}  (${label}: already up to date)"
+    else
+      info "${label}: symlink already up to date."
+    fi
+  elif [[ -e "${link_path}" && ! -L "${link_path}" ]]; then
+    warn "${label}: ${link_path} exists and is not a symlink — skipping. Remove it manually to let bard manage it."
+  else
+    if [[ "${DRY_RUN}" == true ]]; then
+      dry "symlink ${link_path} → ${target}  (${label})"
+    else
+      ln -sf "${target}" "${link_path}"
+      success "${label}: ${link_path} → ${target}"
+    fi
+  fi
+}
+
+# ── bard list ─────────────────────────────────────────────────────────────────
+cmd_list() {
+  require_jq
+  local filter_category=""
+  local filter_tag=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --category|-c) filter_category="$2"; shift 2 ;;
+      --tag|-t)      filter_tag="$2";      shift 2 ;;
+      *) error "Unknown option: $1" ;;
+    esac
+  done
+
+  if [[ ! -f "${REGISTRY_FILE}" ]]; then
+    error "Registry not found. Run 'bard play' first."
+  fi
+
+  local jq_filter='.[]'
+  if [[ -n "${filter_category}" ]]; then
+    jq_filter+=" | select(.category == \"${filter_category}\")"
+  fi
+  if [[ -n "${filter_tag}" ]]; then
+    jq_filter+=" | select(.tags | ascii_downcase | contains(\"${filter_tag}\"))"
+  fi
+
+  local results
+  results="$(jq -r "[${jq_filter}]" "${REGISTRY_FILE}")"
+
+  local count
+  count="$(echo "${results}" | jq 'length')"
+
+  if [[ "${count}" -eq 0 ]]; then
+    info "No skills found."
+    return
+  fi
+
+  printf '\n'
+  printf '%-35s %-15s %s\n' "ID" "CATEGORY" "DESCRIPTION"
+  printf '%-35s %-15s %s\n' "$(printf '%0.s─' {1..35})" "$(printf '%0.s─' {1..15})" "$(printf '%0.s─' {1..40})"
+
+  echo "${results}" | jq -r '.[] | [.id, .category, .description] | @tsv' | \
+    while IFS=$'\t' read -r id category description; do
+      printf '%-35s %-15s %s\n' "${id}" "${category}" "${description}"
+    done
+
+  printf '\n'
+  info "${count} skill(s) found."
+}
+
+# ── bard info ─────────────────────────────────────────────────────────────────
+cmd_info() {
+  local skill_id="${1:-}"
+  [[ -z "${skill_id}" ]] && error "Usage: bard info <skill-id>"
+
+  local skill_file
+  skill_file="$(_find_skill_file "${skill_id}")"
+
+  [[ -z "${skill_file}" ]] && error "Skill not found: ${skill_id}. Run 'bard list' to see available skills."
+
+  cat "${skill_file}"
+}
+
+# ── bard show ─────────────────────────────────────────────────────────────────
+cmd_show() {
+  local skill_id="${1:-}"
+  [[ -z "${skill_id}" ]] && error "Usage: bard show <skill-id>"
+
+  local skill_file
+  skill_file="$(_find_skill_file "${skill_id}")"
+
+  [[ -z "${skill_file}" ]] && error "Skill not found: ${skill_id}. Run 'bard list' to see available skills."
+
+  local content
+  content="$(cat "${skill_file}")"
+
+  # Find all {{variable}} placeholders
+  local variables
+  variables="$(echo "${content}" | grep -oE '\{\{[a-zA-Z_][a-zA-Z0-9_]*\}\}' | sort -u | sed 's/[{}]//g' || true)"
+
+  if [[ -z "${variables}" ]]; then
+    echo "${content}"
+    return
+  fi
+
+  info "Skill: ${skill_id}"
+  info "Fill in the following variables (press Enter to leave blank):"
+  printf '\n'
+
+  # Collect values into parallel arrays (bash 3 compatible)
+  # Read variable names from fd 3 so stdin (fd 0) stays available for user input
+  local var_names=()
+  local var_values=()
+  while IFS= read -r var <&3; do
+    printf '  %s: ' "${var}"
+    local value
+    IFS= read -r value </dev/tty 2>/dev/null || IFS= read -r value || true
+    var_names+=("${var}")
+    var_values+=("${value}")
+  done 3<<< "${variables}"
+
+  printf '\n'
+
+  # Replace all {{variable}} in content using a temp file
+  local tmp_file
+  tmp_file="$(mktemp)"
+  printf '%s' "${content}" > "${tmp_file}"
+
+  local i
+  for (( i=0; i<${#var_names[@]}; i++ )); do
+    local var="${var_names[$i]}"
+    local val="${var_values[$i]}"
+    # Escape for sed: & and \ are special in replacement
+    local val_escaped
+    val_escaped="${val//\\/\\\\}"
+    val_escaped="${val_escaped//&/\\&}"
+    # Use perl for safe multi-line replacement
+    perl -i -p -e "s/\{\{${var}\}\}/${val_escaped}/g" "${tmp_file}"
+  done
+
+  printf '\n'
+  cat "${tmp_file}"
+  rm -f "${tmp_file}"
+}
+
+# ── bard compose / bard add ───────────────────────────────────────────────────
+cmd_compose() {
+  local skill_name=""
+  local category=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --category|-c) category="$2"; shift 2 ;;
+      -*) error "Unknown option: $1" ;;
+      *) skill_name="$1"; shift ;;
+    esac
+  done
+
+  [[ -z "${skill_name}" ]] && error "Usage: bard compose <name> --category <category>"
+  [[ -z "${category}" ]]   && error "Usage: bard compose <name> --category <category>"
+
+  # Normalise name: lowercase, replace spaces/underscores with hyphens
+  skill_name="$(echo "${skill_name}" | tr '[:upper:]' '[:lower:]' | tr ' _' '-')"
+
+  local dest_dir="${SKILLS_DIR}/${category}"
+  local dest_file="${dest_dir}/bard-${skill_name}.md"
+
+  if [[ "${DRY_RUN}" == true ]]; then
+    info "bard compose (dry run) — no changes will be made:"
+    printf '\n'
+    if [[ ! -d "${dest_dir}" ]]; then
+      dry "mkdir -p ${dest_dir}"
+    fi
+    if [[ -f "${dest_file}" ]]; then
+      dry "create ${dest_file}  (ERROR: file already exists — would abort)"
+    else
+      dry "create ${dest_file}"
+    fi
+    printf '\n'
+    info "Dry run complete — no changes were made."
+    return
+  fi
+
+  mkdir -p "${dest_dir}"
+
+  if [[ -f "${dest_file}" ]]; then
+    error "Skill already exists: ${dest_file}"
+  fi
+
+  cat > "${dest_file}" <<EOF
+---
+id: bard-${skill_name}
+name: $(echo "${skill_name}" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2)); print}')
+category: ${category}
+tags: []
+agents: [claude, openai, cursor]
+description: TODO — describe what this skill does
+---
+
+## System Prompt
+
+TODO — describe the AI's role and behaviour for this skill.
+
+## User Prompt Template
+
+TODO — write the prompt template. Use {{variable}} for placeholders.
+
+{{input}}
+
+## Expected Output Format
+
+TODO — describe the expected output format and structure.
+EOF
+
+  success "Created: ${dest_file}"
+  info "Edit the file to fill in your skill, then run 'bard play' to rebuild the registry."
+}
+
+# ── Skill lookup ───────────────────────────────────────────────────────────────
+_find_skill_file() {
+  local skill_id="$1"
+
+  # Try registry first (fastest)
+  if [[ -f "${REGISTRY_FILE}" ]] && command -v jq &>/dev/null; then
+    local found
+    found="$(jq -r --arg id "${skill_id}" '.[] | select(.id == $id) | .file' "${REGISTRY_FILE}" 2>/dev/null || true)"
+    if [[ -n "${found}" && -f "${found}" ]]; then
+      echo "${found}"
+      return
+    fi
+  fi
+
+  # Fallback: search by filename
+  local result
+  result="$(find "${SKILLS_DIR}" -name "${skill_id}.md" -type f 2>/dev/null | head -1 || true)"
+  if [[ -z "${result}" ]]; then
+    result="$(find "${SKILLS_DIR}" -name "bard-${skill_id}.md" -type f 2>/dev/null | head -1 || true)"
+  fi
+  echo "${result}"
+}
+
+# ── Help ───────────────────────────────────────────────────────────────────────
+cmd_help() {
+  cat <<EOF
+
+  bard v${BARD_VERSION} — Bard Agentic Resource Distribution
+
+  USAGE
+    bard [--dry-run] <command> [options]
+
+  COMMANDS
+    play                              Install/update BARD, sync skills, rebuild registry
+    list [--category <c>] [--tag <t>] Browse available skills
+    info <skill-id>                   Show full skill file content
+    show <skill-id>                   Fill {{variables}} interactively, print resolved prompt
+    compose <name> --category <c>     Scaffold a new skill in ~/.agents/skills/
+    add <name> --category <c>         Alias for compose
+    help                              Show this help
+
+  FLAGS
+    --dry-run, -n                     Preview what a command would do without making changes
+                                      Supported by: play, compose
+
+  EXAMPLES
+    bard play
+    bard --dry-run play
+    bard play --dry-run
+    bard list
+    bard list --category coding
+    bard info bard-code-review
+    bard show bard-summarize
+    bard compose my-skill --category devops
+    bard --dry-run compose my-skill --category devops
+
+  SKILL LOCATIONS
+    Official skills  ~/.agents/skills/<category>/bard-*.md  (managed by bard play)
+    Custom skills    ~/.agents/skills/<category>/*.md        (never touched by bard)
+    Registry         ~/.agents/registry/skills.json
+
+EOF
+}
+
+# ── Dispatch ───────────────────────────────────────────────────────────────────
+main() {
+  # Parse --dry-run / -n globally — strip it from args before dispatching
+  local cmd=""
+  local args=()
+
+  for arg in "$@"; do
+    case "${arg}" in
+      --dry-run|-n) DRY_RUN=true ;;
+      *)
+        if [[ -z "${cmd}" ]]; then
+          cmd="${arg}"
+        else
+          args+=("${arg}")
+        fi
+        ;;
+    esac
+  done
+
+  cmd="${cmd:-help}"
+
+  case "${cmd}" in
+    play)                cmd_play "${args[@]+"${args[@]}"}" ;;
+    list)                cmd_list "${args[@]+"${args[@]}"}" ;;
+    info)                cmd_info "${args[@]+"${args[@]}"}" ;;
+    show)                cmd_show "${args[@]+"${args[@]}"}" ;;
+    compose|add)         cmd_compose "${args[@]+"${args[@]}"}" ;;
+    help|--help|-h)      cmd_help ;;
+    version|--version)   echo "bard ${BARD_VERSION}" ;;
+    *) error "Unknown command: ${cmd}. Run 'bard help' for usage." ;;
+  esac
+}
+
+main "$@"

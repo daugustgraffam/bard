@@ -1,0 +1,14 @@
+version: "1.0.0"
+repo_name: bard
+description: "Bard Agentic Resource Distribution"
+
+registry:
+  skill_dir: ~/.agents/skills/
+  index: ~/.agents/registry/skills.json
+
+agents:
+  claude:
+    skills_link: ~/.claude/skills
+  cursor:
+    skills_link: ~/.cursor/skills
+  openai: {}

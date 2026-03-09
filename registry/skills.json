@@ -1,0 +1,74 @@
+[
+  {
+    "id": "bard-compare",
+    "name": "Compare",
+    "category": "analysis",
+    "description": "Compare two or more approaches and recommend the best one with clear reasoning",
+    "tags": "[compare, analysis, decision, tradeoffs]",
+    "agents": "[claude, openai, cursor]",
+    "file": "/Users/dirk/.agents/skills/analysis/bard-compare.md"
+  },
+  {
+    "id": "bard-code-review",
+    "name": "Code Review",
+    "category": "coding",
+    "description": "Reviews code for bugs, style issues, performance problems, and improvements",
+    "tags": "[review, quality, feedback, bugs, style]",
+    "agents": "[claude, openai, cursor]",
+    "file": "/Users/dirk/.agents/skills/coding/bard-code-review.md"
+  },
+  {
+    "id": "bard-refactor",
+    "name": "Refactor",
+    "category": "coding",
+    "description": "Refactor code for improved readability, maintainability, and performance",
+    "tags": "[refactor, readability, performance, clean-code]",
+    "agents": "[claude, openai, cursor]",
+    "file": "/Users/dirk/.agents/skills/coding/bard-refactor.md"
+  },
+  {
+    "id": "bard-my-skill",
+    "name": "My Skill",
+    "category": "devops",
+    "description": "TODO — describe what this skill does",
+    "tags": "[]",
+    "agents": "[claude, openai, cursor]",
+    "file": "/Users/dirk/.agents/skills/devops/bard-my-skill.md"
+  },
+  {
+    "id": "bard-write-dockerfile",
+    "name": "Write Dockerfile",
+    "category": "devops",
+    "description": "Generate a production-ready Dockerfile with security and efficiency best practices",
+    "tags": "[docker, dockerfile, devops, containers, deployment]",
+    "agents": "[claude, openai, cursor]",
+    "file": "/Users/dirk/.agents/skills/devops/bard-write-dockerfile.md"
+  },
+  {
+    "id": "bard-create-skill",
+    "name": "Create Skill",
+    "category": "meta",
+    "description": "Scaffold a new BARD skill with correct structure and best practices",
+    "tags": "[scaffold, template, meta]",
+    "agents": "[claude, openai, cursor]",
+    "file": "/Users/dirk/.agents/skills/meta/bard-create-skill.md"
+  },
+  {
+    "id": "bard-improve-skill",
+    "name": "Improve Skill",
+    "category": "meta",
+    "description": "Review and improve an existing BARD skill for clarity, reusability, and effectiveness",
+    "tags": "[review, improve, meta, quality]",
+    "agents": "[claude, openai, cursor]",
+    "file": "/Users/dirk/.agents/skills/meta/bard-improve-skill.md"
+  },
+  {
+    "id": "bard-summarize",
+    "name": "Summarize",
+    "category": "writing",
+    "description": "Summarise text into clear, structured key points",
+    "tags": "[summary, writing, concise, key-points]",
+    "agents": "[claude, openai, cursor]",
+    "file": "/Users/dirk/.agents/skills/writing/bard-summarize.md"
+  }
+]
