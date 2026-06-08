@@ -97,6 +97,7 @@ cmd_play() {
     dry "mkdir -p ${REGISTRY_DIR}"
   else
     mkdir -p "${SKILLS_DIR}" "${REGISTRY_DIR}"
+    # shellcheck disable=SC2088  # literal ~ shown to user is friendlier than $HOME
     success "~/.agents/ structure ready."
   fi
 
