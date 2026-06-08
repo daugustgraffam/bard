@@ -177,8 +177,9 @@ cmd_play() {
 
   # 7. PATH warning (always shown — informational only)
   if [[ ":${PATH}:" != *":${LOCAL_BIN}:"* ]]; then
-    warn "~/.local/bin is not in your PATH."
-    warn "Add this to your shell profile (~/.zshrc or ~/.bashrc):"
+    warn '~/.local/bin is not in your PATH.'
+    warn 'Add this to your shell profile (~/.zshrc or ~/.bashrc):'
+    # shellcheck disable=SC2016  # literal ${HOME}/${PATH} is intentional — user copies this verbatim
     warn '  export PATH="${HOME}/.local/bin:${PATH}"'
   fi
 
