@@ -5,7 +5,10 @@ set -euo pipefail
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 BARD_VERSION="1.0.0"
-BARD_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_BARD_SCRIPT="${BASH_SOURCE[0]}"
+while [[ -L "$_BARD_SCRIPT" ]]; do _BARD_SCRIPT="$(readlink "$_BARD_SCRIPT")"; done
+BARD_REPO_ROOT="$(cd "$(dirname "$_BARD_SCRIPT")" && pwd)"
+unset _BARD_SCRIPT
 AGENTS_DIR="${HOME}/.agents"
 SKILLS_DIR="${AGENTS_DIR}/skills"
 REGISTRY_DIR="${AGENTS_DIR}/registry"
@@ -33,19 +36,20 @@ build_registry() {
   local entries="[]"
 
   while IFS= read -r -d '' skill_file; do
-    local rel_path="${skill_file#${SKILLS_DIR}/}"
-    local category
-    category="$(dirname "${rel_path}")"
-    local filename
-    filename="$(basename "${skill_file}" .md)"
+    # skill_file: $SKILLS_DIR/<skill-id>/SKILL.md
+    local skill_dir
+    skill_dir="$(dirname "${skill_file}")"
+    local skill_id
+    skill_id="$(basename "${skill_dir}")"
 
-    # Parse frontmatter fields
-    local id name tags description agents_list
-    id="$(awk '/^---/{f=!f; next} f && /^id:/{sub(/^id:[[:space:]]*/,""); print; exit}' "${skill_file}" 2>/dev/null || echo "${filename}")"
-    name="$(awk '/^---/{f=!f; next} f && /^name:/{sub(/^name:[[:space:]]*/,""); print; exit}' "${skill_file}" 2>/dev/null || echo "${filename}")"
+    # Parse frontmatter fields (category comes from frontmatter, not directory)
+    local id name tags description agents_list category
+    id="$(awk '/^---/{f=!f; next} f && /^id:/{sub(/^id:[[:space:]]*/,""); print; exit}' "${skill_file}" 2>/dev/null || echo "${skill_id}")"
+    name="$(awk '/^---/{f=!f; next} f && /^name:/{sub(/^name:[[:space:]]*/,""); print; exit}' "${skill_file}" 2>/dev/null || echo "${skill_id}")"
     description="$(awk '/^---/{f=!f; next} f && /^description:/{sub(/^description:[[:space:]]*/,""); print; exit}' "${skill_file}" 2>/dev/null || echo "")"
     tags="$(awk '/^---/{f=!f; next} f && /^tags:/{sub(/^tags:[[:space:]]*/,""); print; exit}' "${skill_file}" 2>/dev/null || echo "[]")"
     agents_list="$(awk '/^---/{f=!f; next} f && /^agents:/{sub(/^agents:[[:space:]]*/,""); print; exit}' "${skill_file}" 2>/dev/null || echo "[]")"
+    category="$(awk '/^---/{f=!f; next} f && /^category:/{sub(/^category:[[:space:]]*/,""); print; exit}' "${skill_file}" 2>/dev/null || echo "uncategorized")"
 
     local entry
     entry="$(jq -n \
@@ -59,7 +63,7 @@ build_registry() {
       '{id: $id, name: $name, category: $category, description: $description, tags: $tags, agents: $agents, file: $file}')"
 
     entries="$(echo "${entries}" | jq ". + [${entry}]")"
-  done < <(find "${SKILLS_DIR}" -name "*.md" -type f -print0 2>/dev/null | sort -z)
+  done < <(find "${SKILLS_DIR}" -name "SKILL.md" -type f -print0 2>/dev/null | sort -z)
 
   echo "${entries}" | jq '.' > "${REGISTRY_FILE}"
   success "Registry rebuilt: $(echo "${entries}" | jq 'length') skills indexed"
@@ -97,38 +101,37 @@ cmd_play() {
   fi
 
   # 3. Sync official skills (bard-* prefix only)
+  # Each skill is a directory: skills/<category>/<skill-id>/SKILL.md
   local synced=0
   local repo_skills_dir="${BARD_REPO_ROOT}/skills"
 
   [[ "${DRY_RUN}" == false ]] && info "Syncing official skills..."
 
-  while IFS= read -r -d '' src_file; do
-    local rel="${src_file#${repo_skills_dir}/}"
-    local category
-    category="$(dirname "${rel}")"
-    local filename
-    filename="$(basename "${src_file}")"
+  while IFS= read -r -d '' src_skill_file; do
+    local src_skill_dir
+    src_skill_dir="$(dirname "${src_skill_file}")"
+    local skill_id
+    skill_id="$(basename "${src_skill_dir}")"
 
-    # Only sync files with bard- prefix
-    if [[ "${filename}" != bard-* ]]; then
+    # Only sync skill directories with bard- prefix
+    if [[ "${skill_id}" != bard-* ]]; then
       continue
     fi
 
-    local dest_dir="${SKILLS_DIR}/${category}"
-    local dest_file="${dest_dir}/${filename}"
+    local dest_skill_dir="${SKILLS_DIR}/${skill_id}"
 
     if [[ "${DRY_RUN}" == true ]]; then
-      if [[ -f "${dest_file}" ]]; then
-        dry "overwrite ${dest_file}  (from ${rel})"
+      if [[ -d "${dest_skill_dir}" ]]; then
+        dry "overwrite ${dest_skill_dir}/  (from ${skill_id}/)"
       else
-        dry "create   ${dest_file}  (from ${rel})"
+        dry "create   ${dest_skill_dir}/  (from ${skill_id}/)"
       fi
     else
-      mkdir -p "${dest_dir}"
-      cp "${src_file}" "${dest_file}"
+      mkdir -p "${dest_skill_dir}"
+      cp -r "${src_skill_dir}/." "${dest_skill_dir}/"
     fi
     (( synced++ )) || true
-  done < <(find "${repo_skills_dir}" -name "*.md" -type f -print0 2>/dev/null | sort -z)
+  done < <(find "${repo_skills_dir}" -name "SKILL.md" -type f -print0 2>/dev/null | sort -z)
 
   if [[ "${DRY_RUN}" == true ]]; then
     dry "${synced} official skill(s) would be synced (user skills with no bard- prefix are untouched)"
@@ -148,8 +151,8 @@ cmd_play() {
 
   # 5. Agent symlinks
   [[ "${DRY_RUN}" == false ]] && info "Creating agent symlinks..."
-  _create_agent_symlink "${HOME}/.claude" "skills" "${AGENTS_DIR}" "Claude Code"
-  _create_agent_symlink "${HOME}/.cursor" "skills" "${AGENTS_DIR}" "Cursor"
+  _create_agent_symlink "${HOME}/.claude" "skills" "${SKILLS_DIR}" "Claude Code"
+  _create_agent_symlink "${HOME}/.cursor" "skills" "${SKILLS_DIR}" "Cursor"
 
   # 6. Symlink bard binary to ~/.local/bin
   local bin_link="${LOCAL_BIN}/bard"
@@ -211,7 +214,8 @@ _create_agent_symlink() {
     if [[ "${DRY_RUN}" == true ]]; then
       dry "symlink ${link_path} → ${target}  (${label})"
     else
-      ln -sf "${target}" "${link_path}"
+      [[ -L "${link_path}" ]] && rm -f "${link_path}"
+      ln -s "${target}" "${link_path}"
       success "${label}: ${link_path} → ${target}"
     fi
   fi
@@ -361,18 +365,16 @@ cmd_compose() {
   # Normalise name: lowercase, replace spaces/underscores with hyphens
   skill_name="$(echo "${skill_name}" | tr '[:upper:]' '[:lower:]' | tr ' _' '-')"
 
-  local dest_dir="${SKILLS_DIR}/${category}"
-  local dest_file="${dest_dir}/bard-${skill_name}.md"
+  local skill_dir="${SKILLS_DIR}/bard-${skill_name}"
+  local dest_file="${skill_dir}/SKILL.md"
 
   if [[ "${DRY_RUN}" == true ]]; then
     info "bard compose (dry run) — no changes will be made:"
     printf '\n'
-    if [[ ! -d "${dest_dir}" ]]; then
-      dry "mkdir -p ${dest_dir}"
-    fi
-    if [[ -f "${dest_file}" ]]; then
-      dry "create ${dest_file}  (ERROR: file already exists — would abort)"
+    if [[ -d "${skill_dir}" ]]; then
+      dry "create ${dest_file}  (ERROR: skill directory already exists — would abort)"
     else
+      dry "mkdir -p ${skill_dir}"
       dry "create ${dest_file}"
     fi
     printf '\n'
@@ -380,11 +382,11 @@ cmd_compose() {
     return
   fi
 
-  mkdir -p "${dest_dir}"
-
-  if [[ -f "${dest_file}" ]]; then
-    error "Skill already exists: ${dest_file}"
+  if [[ -d "${skill_dir}" ]]; then
+    error "Skill already exists: ${skill_dir}/"
   fi
+
+  mkdir -p "${skill_dir}"
 
   cat > "${dest_file}" <<EOF
 ---
@@ -393,7 +395,7 @@ name: $(echo "${skill_name}" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupp
 category: ${category}
 tags: []
 agents: [claude, openai, cursor]
-description: TODO — describe what this skill does
+description: Use when the user wants to TODO. Examples: "...", "..."
 ---
 
 ## System Prompt
@@ -436,37 +438,34 @@ _harmonize_all() {
 
   local queued=0
   local skipped=0
-  local new_files=()
+  local new_dirs=()
 
   while IFS= read -r -d '' skill_file; do
-    local src_filename
-    src_filename="$(basename "${skill_file}")"
+    local skill_dir
+    skill_dir="$(dirname "${skill_file}")"
+    local skill_id
+    skill_id="$(basename "${skill_dir}")"
 
     # Only process bard-* prefixed skills
-    [[ "${src_filename}" != bard-* ]] && continue
+    [[ "${skill_id}" != bard-* ]] && continue
 
-    local rel="${skill_file#${SKILLS_DIR}/}"
-    local category
-    category="$(dirname "${rel}")"
-    local dest_dir="${BARD_REPO_ROOT}/skills/${category}"
-    local dest_file="${dest_dir}/${src_filename}"
+    local dest_dir="${BARD_REPO_ROOT}/skills/${skill_id}"
 
-    if [[ -f "${dest_file}" ]]; then
+    if [[ -d "${dest_dir}" ]]; then
       (( skipped++ )) || true
       continue
     fi
 
     if [[ "${DRY_RUN}" == true ]]; then
-      [[ ! -d "${dest_dir}" ]] && dry "mkdir -p ${dest_dir}"
-      dry "copy ${skill_file} → ${dest_file}"
+      dry "copy ${skill_dir}/ → ${dest_dir}/"
     else
       mkdir -p "${dest_dir}"
-      cp "${skill_file}" "${dest_file}"
-      new_files+=("skills/${category}/${src_filename}")
-      success "Harmonized: ${dest_file}"
+      cp -r "${skill_dir}/." "${dest_dir}/"
+      new_dirs+=("skills/${skill_id}")
+      success "Harmonized: ${dest_dir}/"
     fi
     (( queued++ )) || true
-  done < <(find "${SKILLS_DIR}" -name "*.md" -type f -print0 2>/dev/null | sort -z)
+  done < <(find "${SKILLS_DIR}" -name "SKILL.md" -type f -print0 2>/dev/null | sort -z)
 
   printf '\n'
 
@@ -487,8 +486,8 @@ _harmonize_all() {
   info "Review the skills, then commit and push to share them with your team:"
   printf '\n'
   printf '    cd %s\n' "${BARD_REPO_ROOT}"
-  for f in "${new_files[@]}"; do
-    printf '    git add %s\n' "${f}"
+  for d in "${new_dirs[@]}"; do
+    printf '    git add %s\n' "${d}"
   done
   printf '    git commit -m "harmonize skills from local"\n'
   printf '    git push\n'
@@ -504,60 +503,53 @@ _harmonize_one() {
   skill_file="$(_find_skill_file "${skill_id}")"
   [[ -z "${skill_file}" ]] && error "Skill not found: ${skill_id}. Run 'bard list' to see available skills."
 
-  # Derive category from the directory name
-  local rel="${skill_file#${SKILLS_DIR}/}"
-  local category
-  category="$(dirname "${rel}")"
-  local src_filename
-  src_filename="$(basename "${skill_file}")"
+  local skill_dir
+  skill_dir="$(dirname "${skill_file}")"
+  local src_skill_id
+  src_skill_id="$(basename "${skill_dir}")"
 
-  # Ensure bard- prefix on destination filename and id
-  local dest_filename dest_id
-  if [[ "${src_filename}" == bard-* ]]; then
-    dest_filename="${src_filename}"
-    dest_id="${src_filename%.md}"
+  # Ensure bard- prefix on destination
+  local dest_skill_id dest_dir
+  if [[ "${src_skill_id}" == bard-* ]]; then
+    dest_skill_id="${src_skill_id}"
   else
-    dest_filename="bard-${src_filename}"
-    dest_id="bard-${src_filename%.md}"
+    dest_skill_id="bard-${src_skill_id}"
   fi
-
-  local dest_dir="${BARD_REPO_ROOT}/skills/${category}"
-  local dest_file="${dest_dir}/${dest_filename}"
+  dest_dir="${BARD_REPO_ROOT}/skills/${dest_skill_id}"
 
   if [[ "${DRY_RUN}" == true ]]; then
     info "bard harmonize (dry run) — no changes will be made:"
     printf '\n'
-    [[ ! -d "${dest_dir}" ]] && dry "mkdir -p ${dest_dir}"
-    if [[ -f "${dest_file}" ]]; then
-      dry "copy ${skill_file} → ${dest_file}  (ERROR: file already exists in repo — would abort)"
+    if [[ -d "${dest_dir}" ]]; then
+      dry "copy ${skill_dir}/ → ${dest_dir}/  (ERROR: already exists in repo — would abort)"
     else
-      dry "copy ${skill_file} → ${dest_file}"
-      [[ "${src_filename}" != bard-* ]] && dry "update frontmatter id: ${skill_id} → ${dest_id}"
+      dry "copy ${skill_dir}/ → ${dest_dir}/"
+      [[ "${src_skill_id}" != bard-* ]] && dry "update frontmatter id: ${skill_id} → ${dest_skill_id}"
     fi
     printf '\n'
     info "Dry run complete — no changes were made."
     return
   fi
 
-  if [[ -f "${dest_file}" ]]; then
-    error "${dest_filename} already exists in the repo. Edit it directly to update an official skill."
+  if [[ -d "${dest_dir}" ]]; then
+    error "${dest_skill_id} already exists in the repo. Edit it directly to update an official skill."
   fi
 
   mkdir -p "${dest_dir}"
-  cp "${skill_file}" "${dest_file}"
+  cp -r "${skill_dir}/." "${dest_dir}/"
 
   # If we added a bard- prefix, update the id field in frontmatter
-  if [[ "${src_filename}" != bard-* ]]; then
-    perl -i -p -e "s/^(id:[[:space:]]*)${skill_id}\$/$\{1}${dest_id}/" "${dest_file}"
-    info "Renamed id: ${skill_id} → ${dest_id}"
+  if [[ "${src_skill_id}" != bard-* ]]; then
+    perl -i -p -e "s/^(id:[[:space:]]*)${skill_id}\$/$\{1}${dest_skill_id}/" "${dest_dir}/SKILL.md"
+    info "Renamed id: ${skill_id} → ${dest_skill_id}"
   fi
 
-  success "Harmonized: ${dest_file}"
+  success "Harmonized: ${dest_dir}/"
   info "Review the skill, then commit and push to share it with your team:"
   printf '\n'
   printf '    cd %s\n' "${BARD_REPO_ROOT}"
-  printf '    git add skills/%s/%s\n' "${category}" "${dest_filename}"
-  printf '    git commit -m "add %s skill"\n' "${dest_id}"
+  printf '    git add skills/%s\n' "${dest_skill_id}"
+  printf '    git commit -m "add %s skill"\n' "${dest_skill_id}"
   printf '    git push\n'
   printf '\n'
   info "Others can then run 'bard play' to receive it."
@@ -577,11 +569,11 @@ _find_skill_file() {
     fi
   fi
 
-  # Fallback: search by filename
+  # Fallback: search for <skill-id>/SKILL.md
   local result
-  result="$(find "${SKILLS_DIR}" -name "${skill_id}.md" -type f 2>/dev/null | head -1 || true)"
+  result="$(find "${SKILLS_DIR}" -type f -name "SKILL.md" -path "*/${skill_id}/SKILL.md" 2>/dev/null | head -1 || true)"
   if [[ -z "${result}" ]]; then
-    result="$(find "${SKILLS_DIR}" -name "bard-${skill_id}.md" -type f 2>/dev/null | head -1 || true)"
+    result="$(find "${SKILLS_DIR}" -type f -name "SKILL.md" -path "*/bard-${skill_id}/SKILL.md" 2>/dev/null | head -1 || true)"
   fi
   echo "${result}"
 }
@@ -624,8 +616,8 @@ cmd_help() {
     bard --dry-run harmonize my-skill
 
   SKILL LOCATIONS
-    Official skills  ~/.agents/skills/<category>/bard-*.md  (managed by bard play)
-    Custom skills    ~/.agents/skills/<category>/*.md        (never touched by bard)
+    Official skills  ~/.agents/skills/bard-<name>/SKILL.md  (managed by bard play)
+    Custom skills    ~/.agents/skills/<name>/SKILL.md        (never touched by bard)
     Registry         ~/.agents/registry/skills.json
 
 EOF
