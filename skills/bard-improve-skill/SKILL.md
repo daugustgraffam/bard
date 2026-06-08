@@ -4,7 +4,7 @@ name: Improve Skill
 category: meta
 tags: [review, improve, meta, quality]
 agents: [claude, openai, cursor]
-description: Review and improve an existing BARD skill for clarity, reusability, and effectiveness
+description: Use when the user wants to improve or review an existing BARD skill. Examples: "improve this skill", "review this skill", "make this skill better"
 ---
 
 ## System Prompt

@@ -4,7 +4,7 @@ name: Refactor
 category: coding
 tags: [refactor, readability, performance, clean-code]
 agents: [claude, openai, cursor]
-description: Refactor code for improved readability, maintainability, and performance
+description: Use when the user wants to refactor, clean up, or restructure existing code. Examples: "refactor this", "clean up this code", "improve the structure"
 ---
 
 ## System Prompt

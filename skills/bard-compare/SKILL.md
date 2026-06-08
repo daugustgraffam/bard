@@ -4,7 +4,7 @@ name: Compare
 category: analysis
 tags: [compare, analysis, decision, tradeoffs]
 agents: [claude, openai, cursor]
-description: Compare two or more approaches and recommend the best one with clear reasoning
+description: Use when the user wants to compare options, approaches, tools, or technologies and get a recommendation. Examples: "compare these two approaches", "which is better", "pros and cons of"
 ---
 
 ## System Prompt

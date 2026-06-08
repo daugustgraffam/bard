@@ -4,7 +4,7 @@ name: Code Review
 category: coding
 tags: [review, quality, feedback, bugs, style]
 agents: [claude, openai, cursor]
-description: Reviews code for bugs, style issues, performance problems, and improvements
+description: Use when the user wants a code review, feedback on code quality, or to check for bugs and improvements. Examples: "review this code", "check for issues", "give me feedback on this"
 ---
 
 ## System Prompt

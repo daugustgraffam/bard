@@ -4,7 +4,7 @@ name: Create Skill
 category: meta
 tags: [scaffold, template, meta]
 agents: [claude, openai, cursor]
-description: Scaffold a new BARD skill with correct structure and best practices
+description: Use when the user wants to create a new BARD skill or prompt template. Examples: "create a new skill", "scaffold a skill", "add a skill to bard"
 ---
 
 ## System Prompt

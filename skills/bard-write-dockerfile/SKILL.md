@@ -4,7 +4,7 @@ name: Write Dockerfile
 category: devops
 tags: [docker, dockerfile, devops, containers, deployment]
 agents: [claude, openai, cursor]
-description: Generate a production-ready Dockerfile with security and efficiency best practices
+description: Use when the user wants to write a Dockerfile, containerize an application, or create Docker configuration. Examples: "write a Dockerfile", "containerize my app", "create a Docker image"
 ---
 
 ## System Prompt

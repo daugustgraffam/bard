@@ -4,7 +4,7 @@ name: Summarize
 category: writing
 tags: [summary, writing, concise, key-points]
 agents: [claude, openai, cursor]
-description: Summarise text into clear, structured key points
+description: Use when the user wants to summarize, condense, or extract key points from text. Examples: "summarize this", "give me the key points", "tl;dr"
 ---
 
 ## System Prompt
