@@ -168,6 +168,7 @@ cmd_play() {
   else
     mkdir -p "${LOCAL_BIN}"
     if [[ -L "${bin_link}" && "$(readlink "${bin_link}")" == "${bard_bin}" ]]; then
+      # shellcheck disable=SC2088  # literal ~ shown to user is friendlier than $HOME
       info "~/.local/bin/bard symlink already up to date."
     else
       ln -sf "${bard_bin}" "${bin_link}"
@@ -177,7 +178,9 @@ cmd_play() {
 
   # 7. PATH warning (always shown — informational only)
   if [[ ":${PATH}:" != *":${LOCAL_BIN}:"* ]]; then
+    # shellcheck disable=SC2088  # literal ~ shown to user is friendlier than $HOME
     warn '~/.local/bin is not in your PATH.'
+    # shellcheck disable=SC2088  # literal ~ shown to user is friendlier than $HOME
     warn 'Add this to your shell profile (~/.zshrc or ~/.bashrc):'
     # shellcheck disable=SC2016  # literal ${HOME}/${PATH} is intentional — user copies this verbatim
     warn '  export PATH="${HOME}/.local/bin:${PATH}"'
